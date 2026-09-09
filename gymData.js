@@ -5,23 +5,50 @@
 
 const FILE_NAME = "gym-tracker-data.json"
 
-// Dina förvalda favoritövningar, grupperade per pass.
-// Lägg till/ta bort valfritt - nya övningar som loggas via "Lägg till ny"
-// sparas automatiskt och dyker upp i listan "Övriga" nästa gång.
+// Tillgängliga kategorier. Ändra/lägg till här om du vill ha fler grupper.
+const CATEGORIES = ["Underkropp", "Överkropp", "Övrigt"]
+
+// Dina förvalda favoritövningar. Format: { "Övningsnamn": "Kategori" }
 const DEFAULT_EXERCISES = {
-  "Underkropp": ["Hip Thrust", "Single Leg Deadlift", "Adductor Machine"],
-  "Överkropp": ["Lats Pulldown", "Chest Press", "Bicep Curl", "Tricep Curl"]
+  "Hip Thrust": "Underkropp",
+  "Single Leg Deadlift": "Underkropp",
+  "Adductor Machine": "Underkropp",
+  "Lats Pulldown": "Överkropp",
+  "Chest Press": "Överkropp",
+  "Bicep Curl": "Överkropp",
+  "Tricep Curl": "Överkropp"
 }
 
 function getFileManager() {
-  // Använder iCloud om tillgängligt så datan finns kvar och synkas mellan enheter.
-  const iCloudFM = FileManager.iCloud()
-  return iCloudFM
+  return FileManager.iCloud()
 }
 
 function getFilePath() {
   const fm = getFileManager()
   return fm.joinPath(fm.documentsDirectory(), FILE_NAME)
+}
+
+// Migrerar gammalt dataformat till nya platta formatet { namn: kategori }.
+function migrateIfNeeded(data) {
+  const values = Object.values(data.exercises || {})
+  const isOldFormat = values.length > 0 && Array.isArray(values[0])
+
+  if (isOldFormat) {
+    const flat = {}
+    for (const [cat, names] of Object.entries(data.exercises)) {
+      for (const name of names) flat[name] = cat
+    }
+    if (data.customExercises) {
+      for (const name of data.customExercises) {
+        if (!(name in flat)) flat[name] = "Övrigt"
+      }
+    }
+    data.exercises = flat
+    delete data.customExercises
+    saveData(data)
+  }
+
+  return data
 }
 
 function loadData() {
@@ -30,9 +57,8 @@ function loadData() {
 
   if (!fm.fileExists(path)) {
     const initial = {
-      exercises: DEFAULT_EXERCISES,
-      customExercises: [],
-      history: {} // { "Hip Thrust": [ {date, weight, reps, sets}, ... ] }
+      exercises: { ...DEFAULT_EXERCISES },
+      history: {}
     }
     saveData(initial)
     return initial
@@ -44,10 +70,10 @@ function loadData() {
 
   try {
     const raw = fm.readString(path)
-    return JSON.parse(raw)
+    const data = JSON.parse(raw)
+    return migrateIfNeeded(data)
   } catch (e) {
-    // Om filen är korrupt, backa till tomt state istället för att krascha.
-    const fallback = { exercises: DEFAULT_EXERCISES, customExercises: [], history: {} }
+    const fallback = { exercises: { ...DEFAULT_EXERCISES }, history: {} }
     saveData(fallback)
     return fallback
   }
@@ -60,18 +86,36 @@ function saveData(data) {
 }
 
 function getAllExerciseNames(data) {
-  const favorites = Object.values(data.exercises).flat()
-  const custom = data.customExercises || []
-  // Unika namn, favoriter först
-  return [...new Set([...favorites, ...custom])]
+  return Object.keys(data.exercises)
 }
 
-function addCustomExercise(data, name) {
-  if (!data.customExercises) data.customExercises = []
-  const allNames = getAllExerciseNames(data)
-  if (!allNames.includes(name)) {
-    data.customExercises.push(name)
+function getExercisesByCategory(data) {
+  const grouped = {}
+  for (const cat of CATEGORIES) grouped[cat] = []
+  for (const [name, cat] of Object.entries(data.exercises)) {
+    if (!grouped[cat]) grouped[cat] = []
+    grouped[cat].push(name)
   }
+  return grouped
+}
+
+function addExercise(data, name, category) {
+  data.exercises[name] = category
+  saveData(data)
+  return data
+}
+
+function setExerciseCategory(data, name, category) {
+  if (name in data.exercises) {
+    data.exercises[name] = category
+    saveData(data)
+  }
+  return data
+}
+
+function deleteExercise(data, name) {
+  delete data.exercises[name]
+  saveData(data)
   return data
 }
 
@@ -93,14 +137,11 @@ function logEntry(data, exerciseName, weight, reps, sets) {
   return data
 }
 
-// Enkel förslagstext baserat på förra passet.
 function getSuggestion(entry) {
   if (!entry) return "Inget tidigare pass loggat än - sätt ett startvärde!"
   return `Förra gången: ${entry.weight}kg × ${entry.reps} reps × ${entry.sets} set. Försök öka vikten eller reps denna gång.`
 }
 
-// Jämför senaste passets VIKT med näst senaste passets vikt.
-// Det här är det enda som styr trendpilen i widgeten - enkelt och tydligt.
 function getTrend(data, exerciseName) {
   const hist = data.history[exerciseName]
   if (!hist || hist.length < 2) return "neutral"
@@ -114,10 +155,14 @@ function getTrend(data, exerciseName) {
 }
 
 module.exports = {
+  CATEGORIES,
   loadData,
   saveData,
   getAllExerciseNames,
-  addCustomExercise,
+  getExercisesByCategory,
+  addExercise,
+  setExerciseCategory,
+  deleteExercise,
   getLastEntry,
   logEntry,
   getSuggestion,

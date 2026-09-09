@@ -1,6 +1,5 @@
 // progressWidget.js
 // Detta är widgeten du lägger på hemskärmen.
-// Tryck på den för att öppna logWorkout.js och logga ett nytt pass.
 // Kräver: gymData.js sparad i samma Scriptable-mapp.
 
 const GymData = importModule("gymData")
@@ -8,12 +7,10 @@ const GymData = importModule("gymData")
 const data = GymData.loadData()
 const widget = new ListWidget()
 widget.backgroundColor = new Color("#1c1c1e")
-widget.url = URLScheme.forRunningScript() // Tryck på widget -> öppnar detta script.
-// OBS: byt gärna ut mot en genväg som pekar på logWorkout.js, se instruktioner i README.
+widget.url = URLScheme.forRunningScript()
 
 const family = config.widgetFamily || "medium"
 
-// Välj vilka och hur många övningar som visas beroende på widgetstorlek.
 const allExercises = GymData.getAllExerciseNames(data)
 const exercisesWithHistory = allExercises.filter(name => data.history[name] && data.history[name].length > 0)
 const exercisesToShow = family === "small" ? exercisesWithHistory.slice(0, 1)
@@ -25,7 +22,6 @@ buildWidget(widget, exercisesToShow, family)
 if (config.runsInWidget) {
   Script.setWidget(widget)
 } else {
-  // Förhandsvisning i Scriptable-appen
   if (family === "small") await widget.presentSmall()
   else if (family === "large") await widget.presentLarge()
   else await widget.presentMedium()
@@ -78,7 +74,6 @@ function addExerciseRow(widget, name, family) {
 
   row.addSpacer()
 
-  // Trendpil: jämför senaste vikten mot näst senaste vikten för denna övning.
   const trendSymbols = { up: "↑", down: "↓", neutral: "→" }
   const trendColors = { up: Color.green(), down: Color.red(), neutral: Color.gray() }
   const trendText = row.addText(trendSymbols[trend])

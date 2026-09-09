@@ -6,10 +6,24 @@ const GymData = importModule("gymData")
 
 async function main() {
   const data = GymData.loadData()
-  const exerciseName = await pickExercise(data)
-  if (!exerciseName) return // Avbröt
+  let keepGoing = true
 
-  await logExerciseFlow(data, exerciseName)
+  while (keepGoing) {
+    const exerciseName = await pickExercise(data)
+    if (!exerciseName) break
+
+    keepGoing = await logExerciseFlow(data, exerciseName)
+  }
+}
+
+async function presentAndWait(table, checkDone) {
+  let dismissed = false
+  table.present(false).then(() => { dismissed = true })
+
+  while (!checkDone() && !dismissed) {
+    await new Promise(r => Timer.schedule(100, false, r))
+  }
+  return checkDone()
 }
 
 // ---------- STEG 1: Välj övning ----------
@@ -19,27 +33,22 @@ async function pickExercise(data) {
   table.showSeparators = true
   let chosen = null
   let done = false
+  let manageRequested = false
 
   function buildTable() {
     table.removeAllRows()
+    const grouped = GymData.getExercisesByCategory(data)
 
-    for (const [group, names] of Object.entries(data.exercises)) {
+    for (const category of GymData.CATEGORIES) {
+      const names = grouped[category] || []
+      if (names.length === 0) continue
+
       const header = new UITableRow()
       header.isHeader = true
-      header.addText(group)
+      header.addText(category)
       table.addRow(header)
 
       for (const name of names) {
-        table.addRow(makeExerciseRow(name))
-      }
-    }
-
-    if (data.customExercises && data.customExercises.length > 0) {
-      const header = new UITableRow()
-      header.isHeader = true
-      header.addText("Övriga")
-      table.addRow(header)
-      for (const name of data.customExercises) {
         table.addRow(makeExerciseRow(name))
       }
     }
@@ -49,23 +58,21 @@ async function pickExercise(data) {
     const addCell = addRow.addText("＋ Lägg till ny övning")
     addCell.titleColor = Color.blue()
     addRow.onSelect = async () => {
-      const alert = new Alert()
-      alert.title = "Ny övning"
-      alert.addTextField("t.ex. Shoulder Press")
-      alert.addAction("Lägg till")
-      alert.addCancelAction("Avbryt")
-      const result = await alert.presentAlert()
-      if (result === 0) {
-        const name = alert.textFieldValue(0).trim()
-        if (name.length > 0) {
-          GymData.addCustomExercise(data, name)
-          GymData.saveData(data)
-          chosen = name
-          done = true
-        }
-      }
+      await addNewExerciseFlow(data)
+      buildTable()
     }
     table.addRow(addRow)
+
+    const manageRow = new UITableRow()
+    manageRow.dismissOnSelect = false
+    const manageCell = manageRow.addText("⚙️ Hantera övningar")
+    manageCell.titleColor = Color.gray()
+    manageRow.onSelect = () => {
+      manageRequested = true
+    }
+    table.addRow(manageRow)
+
+    table.reload()
   }
 
   function makeExerciseRow(name) {
@@ -83,15 +90,131 @@ async function pickExercise(data) {
   }
 
   buildTable()
-  table.present(false) // non-blocking-ish: vi pollar nedan
+  await presentAndWait(table, () => done || manageRequested)
 
-  // Vänta tills en övning valts (present() själv blockerar tills stängd,
-  // men onSelect triggas innan dess - vi använder ett litet poll-race istället).
-  while (!done) {
-    await new Promise(r => Timer.schedule(100, false, r))
+  if (manageRequested) {
+    await manageExercisesFlow(data)
+    return await pickExercise(data)
   }
 
   return chosen
+}
+
+// ---------- Lägg till ny övning (med kategori) ----------
+
+async function addNewExerciseFlow(data) {
+  const nameAlert = new Alert()
+  nameAlert.title = "Ny övning"
+  nameAlert.addTextField("t.ex. Shoulder Press")
+  nameAlert.addAction("Nästa")
+  nameAlert.addCancelAction("Avbryt")
+  const nameResult = await nameAlert.presentAlert()
+  if (nameResult !== 0) return
+
+  const name = nameAlert.textFieldValue(0).trim()
+  if (name.length === 0) return
+
+  const catAlert = new Alert()
+  catAlert.title = "Välj kategori"
+  catAlert.message = name
+  for (const cat of GymData.CATEGORIES) {
+    catAlert.addAction(cat)
+  }
+  catAlert.addCancelAction("Avbryt")
+  const catResult = await catAlert.presentSheet()
+  if (catResult < 0 || catResult >= GymData.CATEGORIES.length) return
+
+  const category = GymData.CATEGORIES[catResult]
+  GymData.addExercise(data, name, category)
+}
+
+// ---------- Hantera övningar (byt kategori / ta bort) ----------
+
+async function manageExercisesFlow(data) {
+  const table = new UITable()
+  table.showSeparators = true
+  let finished = false
+
+  function render() {
+    table.removeAllRows()
+
+    const header = new UITableRow()
+    header.isHeader = true
+    header.addText("Hantera övningar")
+    table.addRow(header)
+
+    const infoRow = new UITableRow()
+    const infoCell = infoRow.addText("Tryck på en övning för att byta kategori eller ta bort den.")
+    infoCell.titleColor = Color.gray()
+    infoCell.titleFont = Font.footnote()
+    table.addRow(infoRow)
+
+    const names = GymData.getAllExerciseNames(data)
+    if (names.length === 0) {
+      const emptyRow = new UITableRow()
+      emptyRow.addText("Inga övningar ännu")
+      table.addRow(emptyRow)
+    }
+
+    for (const name of names) {
+      const category = data.exercises[name]
+      const row = new UITableRow()
+      row.dismissOnSelect = false
+      row.height = 46
+      const cell = row.addText(name, category)
+      cell.subtitleColor = Color.gray()
+      row.onSelect = async () => {
+        await showExerciseOptions(data, name)
+        render()
+      }
+      table.addRow(row)
+    }
+
+    const doneRow = new UITableRow()
+    doneRow.dismissOnSelect = false
+    const doneCell = doneRow.addText("✅ Klar")
+    doneCell.titleColor = Color.green()
+    doneCell.titleFont = Font.boldSystemFont(16)
+    doneRow.onSelect = () => { finished = true }
+    table.addRow(doneRow)
+
+    table.reload()
+  }
+
+  render()
+  await presentAndWait(table, () => finished)
+}
+
+async function showExerciseOptions(data, name) {
+  const currentCategory = data.exercises[name]
+  const otherCategories = GymData.CATEGORIES.filter(c => c !== currentCategory)
+
+  const alert = new Alert()
+  alert.title = name
+  alert.message = `Nuvarande kategori: ${currentCategory}`
+  for (const cat of otherCategories) {
+    alert.addAction(`Flytta till "${cat}"`)
+  }
+  alert.addDestructiveAction("🗑 Ta bort övning")
+  alert.addCancelAction("Stäng")
+
+  const result = await alert.presentSheet()
+  if (result < 0) return
+
+  if (result < otherCategories.length) {
+    GymData.setExerciseCategory(data, name, otherCategories[result])
+    return
+  }
+
+  const confirm = new Alert()
+  confirm.title = "Ta bort övning?"
+  confirm.message = `"${name}" försvinner från listan. Redan loggade pass sparas fortfarande.`
+  confirm.addDestructiveAction("Ta bort")
+  confirm.addCancelAction("Avbryt")
+  const confirmResult = await confirm.presentAlert()
+  if (confirmResult === 0) {
+    GymData.deleteExercise(data, name)
+  }
 }
 
 // ---------- STEG 2: Logga vikt / reps / set ----------
@@ -102,7 +225,6 @@ async function logExerciseFlow(data, exerciseName) {
   let reps = last ? last.reps : 8
   let sets = last ? last.sets : 3
   let saved = false
-  let cancelled = false
 
   const table = new UITable()
   table.showSeparators = true
@@ -150,21 +272,9 @@ async function logExerciseFlow(data, exerciseName) {
     }
     table.addRow(saveRow)
 
-    const cancelRow = new UITableRow()
-    cancelRow.dismissOnSelect = false
-    const cancelCell = cancelRow.addText("Avbryt")
-    cancelCell.titleColor = Color.red()
-    cancelRow.onSelect = () => {
-      cancelled = true
-    }
-    table.addRow(cancelRow)
-
     table.reload()
   }
 
-  // Lägger till en informationsrad (t.ex. "Vikt: 72 kg") följt av EN RAD PER KNAPP.
-  // Varje knapp är en egen UITableRow med sin egen row.onSelect - det är den enda
-  // metoden som är helt pålitlig i Scriptable (cell-index inom en rad är opålitligt).
   function addAdjustableField(label, valueText, buttons) {
     const infoRow = new UITableRow()
     infoRow.height = 36
@@ -185,20 +295,20 @@ async function logExerciseFlow(data, exerciseName) {
   }
 
   render()
-  table.present(false)
+  await presentAndWait(table, () => saved)
 
-  while (!saved && !cancelled) {
-    await new Promise(r => Timer.schedule(100, false, r))
-  }
+  if (!saved) return false
 
-  if (saved) {
-    GymData.logEntry(data, exerciseName, weight, reps, sets)
-    const alert = new Alert()
-    alert.title = "Pass loggat! 💪"
-    alert.message = `${exerciseName}: ${weight}kg × ${reps} reps × ${sets} set`
-    alert.addAction("Klart")
-    await alert.presentAlert()
-  }
+  GymData.logEntry(data, exerciseName, weight, reps, sets)
+
+  const alert = new Alert()
+  alert.title = "Pass loggat! 💪"
+  alert.message = `${exerciseName}: ${weight}kg × ${reps} reps × ${sets} set`
+  alert.addAction("Logga en till övning")
+  alert.addAction("Klar - stäng")
+  const resultIndex = await alert.presentAlert()
+
+  return resultIndex === 0
 }
 
 await main()
