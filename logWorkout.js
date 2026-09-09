@@ -1,8 +1,6 @@
 // logWorkout.js
 // Detta script körs när du trycker på widgeten på hemskärmen.
-// Kräver: gymData.js sparad i samma Scriptable-mapp.
-
-const GymData = importModule("gymData")
+// OBS: GymData tillhandahålls av loader-scriptet, deklareras INTE här.
 
 async function main() {
   const data = GymData.loadData()

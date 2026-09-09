@@ -1,8 +1,6 @@
 // progressWidget.js
 // Detta är widgeten du lägger på hemskärmen.
-// Kräver: gymData.js sparad i samma Scriptable-mapp.
-
-const GymData = importModule("gymData")
+// OBS: GymData tillhandahålls av loader-scriptet, deklareras INTE här.
 
 const data = GymData.loadData()
 const widget = new ListWidget()
